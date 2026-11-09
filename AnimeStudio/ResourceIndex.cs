@@ -10,6 +10,16 @@ namespace AnimeStudio
     {
         private static AssetIndex Instance = new();
         private static Dictionary<uint, Dictionary<uint, string>> BundleMap = new Dictionary<uint, Dictionary<uint, string>>();
+        public static void LoadFileStrict(string path)
+        {
+            Clear();
+            using var stream=File.OpenText(path);
+            using var reader=new JsonTextReader(stream) { MaxDepth=64 };
+            var serializer=new JsonSerializer { NullValueHandling=NullValueHandling.Ignore };
+            var parsed=serializer.Deserialize<AssetIndex>(reader) ?? throw new InvalidDataException("Resource index is null.");
+            Instance=parsed;
+            BuildBundleMap();
+        }
         public static void FromFile(string path)
         {
             if (!string.IsNullOrEmpty(path))

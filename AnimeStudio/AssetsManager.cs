@@ -16,6 +16,23 @@ namespace AnimeStudio
         public bool Silent = false;
         public bool SkipProcess = false;
         public bool ResolveDependencies = false;
+        /// <summary>For scoped automation, never discover resources outside registered streams.</summary>
+        public bool ExplicitResourcesOnly = false;
+        public const int AutomationApiVersion = 1;
+
+        public void RegisterResourceFile(string path)
+        {
+            if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("Resource path must be absolute.", nameof(path));
+            var name = Path.GetFileName(path);
+            if (resourceFileReaders.ContainsKey(name)) throw new InvalidDataException("Ambiguous resource name: " + name);
+            resourceFileReaders.Add(name, new BinaryReader(File.OpenRead(path)));
+        }
+
+        public void ProcessLoadedAssets()
+        {
+            ReadAssets();
+            ProcessAssets();
+        }
         public string SpecifyUnityVersion;
         /// <summary>
         /// Invoked after each bundle/CAB group is loaded from a multi-bundle block.
@@ -137,6 +154,9 @@ namespace AnimeStudio
             {
                 return true;
             }
+
+            // Automation must explicitly supply dependencies, including avatar bundles.
+            if (ExplicitResourcesOnly) return false;
 
             if (!AssetsHelper.TryGetCABLocation(cabName, out var fullPath, out var offset)
                 || !File.Exists(fullPath))

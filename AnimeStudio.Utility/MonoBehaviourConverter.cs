@@ -12,13 +12,16 @@ namespace AnimeStudio
             helper.AddMonoBehaviour(m_Type.m_Nodes, 0);
             if (m_MonoBehaviour.m_Script.TryGet(out var m_Script))
             {
-                var typeDef = assemblyLoader.GetTypeDefinition(m_Script.m_AssemblyName, string.IsNullOrEmpty(m_Script.m_Namespace) ? m_Script.m_ClassName : $"{m_Script.m_Namespace}.{m_Script.m_ClassName}");
+                var module=m_Script.m_AssemblyName.EndsWith(".dll",System.StringComparison.OrdinalIgnoreCase) ? m_Script.m_AssemblyName : m_Script.m_AssemblyName+".dll";
+                var typeDef = assemblyLoader.GetTypeDefinition(module, string.IsNullOrEmpty(m_Script.m_Namespace) ? m_Script.m_ClassName : $"{m_Script.m_Namespace}.{m_Script.m_ClassName}");
                 if (typeDef != null)
                 {
                     var typeDefinitionConverter = new TypeDefinitionConverter(typeDef, helper, 1);
                     m_Type.m_Nodes.AddRange(typeDefinitionConverter.ConvertToTypeTreeNodes());
                 }
+                else return null;
             }
+            else return null;
             return m_Type;
         }
     }

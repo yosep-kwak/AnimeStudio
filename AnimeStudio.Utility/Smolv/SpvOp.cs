@@ -316,8 +316,9 @@ namespace Smolv
 
 	public static class SpvOpExtensions
 	{
-		public static bool OpHasResult(this SpvOp _this)
+		public static bool OpHasResult(this SpvOp _this, int encodingVersion=0)
 		{
+			if(encodingVersion==1 && (int)_this>=333 && (int)_this<=366) return true;
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
 			{
 				return false;
@@ -325,8 +326,9 @@ namespace Smolv
 			return OpData.SpirvOpData[(int)_this].hasResult != 0;
 		}
 
-		public static bool OpHasType(this SpvOp _this)
+		public static bool OpHasType(this SpvOp _this, int encodingVersion=0)
 		{
+			if(encodingVersion==1 && (int)_this>=333 && (int)_this<=366) return true;
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
 			{
 				return false;
@@ -334,8 +336,9 @@ namespace Smolv
 			return OpData.SpirvOpData[(int)_this].hasType != 0;
 		}
 
-		public static int OpDeltaFromResult(this SpvOp _this)
+		public static int OpDeltaFromResult(this SpvOp _this, int encodingVersion=0)
 		{
+			if(encodingVersion==1 && (int)_this>=333 && (int)_this<=366) return 1;
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
 			{
 				return 0;
@@ -343,8 +346,9 @@ namespace Smolv
 			return OpData.SpirvOpData[(int)_this].deltaFromResult;
 		}
 
-		public static bool OpVarRest(this SpvOp _this)
+		public static bool OpVarRest(this SpvOp _this, int encodingVersion=0)
 		{
+			if(encodingVersion==1 && (int)_this>=331 && (int)_this<=366) return true;
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
 			{
 				return false;

@@ -879,7 +879,7 @@ namespace AnimeStudio
                 m_SubPrograms.Add(new SerializedSubProgram(reader));
             }
 
-            if ((version[0] == 2021 && version[1] > 3) ||
+            if (version[0] > 2022 || (version[0] == 2021 && version[1] > 3) ||
                version[0] == 2021 && version[1] == 3 && version[2] >= 10 || //2021.3.10f1 and up
                (version[0] == 2022 && version[1] > 1) ||
                version[0] == 2022 && version[1] == 1 && version[2] >= 13) //2022.1.13f1 and up
@@ -950,7 +950,9 @@ namespace AnimeStudio
         {
             var version = reader.version;
 
-            if (version[0] > 2020 || (version[0] == 2020 && version[1] >= 2)) //2020.2 and up
+            // These editor-only pass fields were removed from player serialization in 2023.1.
+            // Verified against Unity release TypeTreeDumps (2022.3, 2023.1, 6000.3.15f1).
+            if (version[0] < 2023 && (version[0] > 2020 || (version[0] == 2020 && version[1] >= 2)))
             {
                 int numEditorDataHash = reader.ReadInt32();
                 m_EditorDataHash = new List<Hash128>();
@@ -1231,6 +1233,7 @@ namespace AnimeStudio
         public byte[] compressedBlob;
         public uint[] stageCounts;
         public ShaderPlatformInfos[] platformInfos;
+        public string ParsingFailure { get; private set; }
 
         public override string Name => m_ParsedForm?.m_Name ?? m_Name;
         // public static bool HasPlatformInfos(SerializedType type) => type.Match("D114ED797139152A2E4A42339CF4AA8E"); // Star Rail
@@ -1254,8 +1257,9 @@ namespace AnimeStudio
                 try
                 {
                     m_ParsedForm = new SerializedShader(reader);
-                } catch (System.IO.EndOfStreamException)
+                } catch (System.IO.EndOfStreamException exception)
                 {
+                    ParsingFailure = $"Unity {reader.assetsFile.unityVersion}; object byte offset {reader.byteStart}; object byte length {reader.byteSize}; reader byte position {reader.Position}. {exception}";
                     Logger.Error($"Cannot parse shader, no more bytes left for asset {reader.assetsFile.fileName} of {reader.assetsFile.originalPath} at path {reader.m_PathID}.");
                     return;
                 }
@@ -1320,7 +1324,7 @@ namespace AnimeStudio
                         reader.AlignStream();
                     }
 
-                    if ((version[0] == 2021 && version[1] > 3) ||
+                    if (version[0] > 2022 || (version[0] == 2021 && version[1] > 3) ||
                         version[0] == 2021 && version[1] == 3 && version[2] >= 12 || //2021.3.12f1 and up
                         (version[0] == 2022 && version[1] > 1) ||
                         version[0] == 2022 && version[1] == 1 && version[2] >= 21) //2022.1.21f1 and up

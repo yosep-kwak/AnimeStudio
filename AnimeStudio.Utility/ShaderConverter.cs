@@ -162,49 +162,81 @@ namespace AnimeStudio
                 {
                     sb.Append(ConvertSerializedShaderState(m_Passe.m_State));
 
-                    if (m_Passe.progVertex.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progVertex))
                     {
                         sb.Append("Program \"vp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progVertex, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progFragment.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progFragment))
                     {
                         sb.Append("Program \"fp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progFragment, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progGeometry.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progGeometry))
                     {
                         sb.Append("Program \"gp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progGeometry, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progHull.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progHull))
                     {
                         sb.Append("Program \"hp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progHull, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progDomain.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progDomain))
                     {
                         sb.Append("Program \"dp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progDomain, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progRayTracing?.m_SubPrograms.Count > 0)
+                    if (HasPrograms(m_Passe.progRayTracing))
                     {
                         sb.Append("Program \"rtp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedPrograms(m_Passe.progRayTracing, platforms, shaderPrograms));
                         sb.Append("}\n");
                     }
                 }
                 sb.Append("}\n");
+            }
+            return sb.ToString();
+        }
+
+        private static bool HasPrograms(SerializedProgram program) => program != null &&
+            (program.m_SubPrograms?.Count > 0 || program.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true);
+
+        private static string ConvertSerializedPrograms(SerializedProgram program, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        {
+            if (program.m_SubPrograms?.Count > 0)
+                return ConvertSerializedSubPrograms(program.m_SubPrograms, platforms, shaderPrograms);
+            var sb = new StringBuilder();
+            foreach (var group in program.m_PlayerSubPrograms ?? new List<List<SerializedPlayerSubProgram>>())
+            foreach (var player in group)
+            {
+                var found = false;
+                for (var platform = 0; platform < platforms.Length; platform++)
+                {
+                    if (!CheckGpuProgramUsable(platforms[platform], player.m_GpuProgramType)) continue;
+                    var programs = shaderPrograms[platform]?.m_SubPrograms;
+                    if (programs == null || player.m_BlobIndex >= programs.Length || programs[player.m_BlobIndex] == null)
+                        throw new InvalidDataException($"Player shader blob {player.m_BlobIndex} is absent for {platforms[platform]}.");
+                    var compiled = programs[player.m_BlobIndex];
+                    if (compiled.m_ProgramType != player.m_GpuProgramType)
+                        throw new InvalidDataException($"Player shader blob {player.m_BlobIndex} GPU type differs from its serialized reference.");
+                    sb.Append($"SubProgram \"{GetPlatformString(platforms[platform])}\" {{\n");
+                    sb.Append($"// Player keyword indices: {string.Join(",", player.m_KeywordIndices)}; requirements: {player.m_ShaderRequirements}\n");
+                    sb.Append(compiled.Export());
+                    sb.Append("\n}\n");
+                    found = true;
+                }
+                if (!found) throw new NotSupportedException($"No converter platform for player GPU type {player.m_GpuProgramType}.");
             }
             return sb.ToString();
         }
@@ -1053,10 +1085,10 @@ namespace AnimeStudio
                             try
                             {
                                 var programCodeSpan = m_ProgramCode.AsSpan();
-                                var g = Compiler.Disassemble(programCodeSpan.GetPinnableReference(), new PointerUSize((ulong)programCodeSpan.Length), DisasmFlags.None, "");
+                                var disassembly = Disassemble(programCodeSpan);
 
                                 sb.Append($"// hash: {ComputeHash64(programCodeSpan):x8}\n");
-                                sb.Append(g.AsString());
+                                sb.Append(disassembly);
                             }
                             catch (Exception e)
                             {
@@ -1105,8 +1137,7 @@ namespace AnimeStudio
 
                                 try
                                 {
-                                    var g = Compiler.Disassemble(buffSpan.GetPinnableReference(), new PointerUSize((ulong)buffSpan.Length), DisasmFlags.None, "");
-                                    sb.Append(g.AsString());
+                                    sb.Append(Disassemble(buffSpan));
                                 }
                                 catch (Exception ex)
                                 {
@@ -1159,6 +1190,20 @@ namespace AnimeStudio
             sb.Append('"');
             return sb.ToString();
         }
+        private static string Disassemble(ReadOnlySpan<byte> code)
+        {
+            // A ref byte is not a native pointer: the old overload passed its numeric value
+            // as IntPtr and crashed in D3DDisassemble. Pin the complete bytecode buffer.
+            var bytes = code.ToArray();
+            var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            try
+            {
+                using var blob = Compiler.Disassemble(pinned.AddrOfPinnedObject(), new PointerUSize((ulong)bytes.Length), DisasmFlags.None, "");
+                return blob.AsString();
+            }
+            finally { pinned.Free(); }
+        }
+
         public ulong ComputeHash64(Span<byte> data)
         {
             ulong hval = 0;

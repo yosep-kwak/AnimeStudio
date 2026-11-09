@@ -2,6 +2,10 @@ using System;
 using System.IO;
 using System.Text;
 
+// Modern decoding follows the public-domain reference by Aras Pranckevicius:
+// https://github.com/aras-p/smol-v/blob/6303e979b59153ee7007fd14e06d3fed8687b64c/source/smolv.cpp
+// Encoding 1 is explicit; encoding 0 retains the historical Unity 2017-2020 decode path.
+
 namespace Smolv
 {
 	public static class SmolvDecoder
@@ -128,7 +132,9 @@ namespace Smolv
 					output.Write(SpirVHeaderMagic);
 					input.BaseStream.Position += sizeof(uint);
 					uint version = input.ReadUInt32();
-					output.Write(version);
+					var encodingVersion=(int)(version>>24);
+					if(encodingVersion>1) return false;
+					output.Write(version & 0x00FFFFFF);
 					uint generator = input.ReadUInt32();
 					output.Write(generator);
 					int bound = input.ReadInt32();
@@ -157,7 +163,7 @@ namespace Smolv
 
 						uint ioffs = 1;
 						// read type as varint, if we have it
-						if (op.OpHasType())
+						if (op.OpHasType(encodingVersion))
 						{
 							if (!ReadVarint(input, out uint value))
 							{
@@ -169,7 +175,7 @@ namespace Smolv
 						}
 
 						// read result as delta+varint, if we have it
-						if (op.OpHasResult())
+						if (op.OpHasResult(encodingVersion))
 						{
 							if (!ReadVarint(input, out uint value))
 							{
@@ -190,14 +196,40 @@ namespace Smolv
 								return false;
 							}
 
-							int zds = prevDecorate + unchecked((int)value);
+							int zds = prevDecorate + (encodingVersion>0 ? ZigDecode(value) : unchecked((int)value));
 							output.Write(zds);
 							prevDecorate = zds;
 							ioffs++;
 						}
 
+						if(op==SpvOp.MemberDecorate && encodingVersion>0)
+						{
+							if(input.BaseStream.Position>=inputEndPosition) return false;
+							var count=input.ReadByte(); uint previousIndex=0,previousOffset=0;
+							if(count==0) return false;
+							for(var member=0;member<count;member++)
+							{
+								if(!ReadVarint(input,out var memberIndex)||!ReadVarint(input,out var decoration)) return false;
+								memberIndex+=previousIndex; previousIndex=memberIndex;
+								var extra=DecorationExtraOps((int)decoration); uint memberLength;
+								if(extra<0) { if(!ReadVarint(input,out memberLength)) return false; memberLength+=4; }
+								else memberLength=(uint)(4+extra);
+								if(memberLength<4||memberLength>65535) return false;
+								if(member==0 && memberLength!=instrLen) return false;
+								if(member>0) { output.Write((memberLength<<16)|(uint)op); output.Write(prevDecorate); }
+								output.Write(memberIndex); output.Write(decoration);
+								if(decoration==35)
+								{
+									if(memberLength!=5||!ReadVarint(input,out var offset)) return false;
+									offset+=previousOffset; output.Write(offset); previousOffset=offset;
+								}
+								else for(uint word=4;word<memberLength;word++) { if(!ReadVarint(input,out var value)) return false; output.Write(value); }
+							}
+							continue;
+						}
+
 						// Read this many IDs, that are relative to result ID
-						int relativeCount = op.OpDeltaFromResult();
+						int relativeCount = op.OpDeltaFromResult(encodingVersion);
 						bool inverted = false;
 						if (relativeCount < 0)
 						{
@@ -211,7 +243,7 @@ namespace Smolv
 								return false;
 							}
 
-							int zd = inverted ? ZigDecode(value) : unchecked((int)value);
+							int zd = inverted || encodingVersion>0 ? ZigDecode(value) : unchecked((int)value);
 							output.Write(prevResult - zd);
 						}
 
@@ -223,7 +255,7 @@ namespace Smolv
 							if (instrLen > 7) output.Write((swizzle >> 2) & 3);
 							if (instrLen > 8) output.Write(swizzle & 3);
 						}
-						else if (op.OpVarRest())
+						else if (op.OpVarRest(encodingVersion))
 						{
 							// read rest of words with variable encoding
 							for (; ioffs < instrLen; ++ioffs)
@@ -289,9 +321,11 @@ namespace Smolv
 			}
 
 			uint headerVersion = BitConverter.ToUInt32(data, 1 * sizeof(uint));
-			if (headerVersion < 0x00010000 || headerVersion > 0x00010300)
+			if ((headerVersion>>24)>1) return false;
+			headerVersion &= 0x00FFFFFF;
+			if (headerVersion < 0x00010000 || headerVersion > 0x00010600)
 			{
-				// only support 1.0 through 1.3
+				// SPIR-V 1.0 through 1.6; high byte is the SMOL-V encoding version.
 				return false;
 			}
 
@@ -302,20 +336,20 @@ namespace Smolv
 		{
 			uint v = 0;
 			int shift = 0;
-			while (input.BaseStream.Position < input.BaseStream.Length)
+			while (input.BaseStream.Position < input.BaseStream.Length && shift<35)
 			{
 				byte b = input.ReadByte();
+				if(shift==28 && (b&0xF0)!=0) { value=0; return false; }
 				v |= unchecked((uint)(b & 127) << shift);
 				shift += 7;
 				if ((b & 128) == 0)
 				{
-					break;
+					value=v; return true;
 				}
 			}
 
 			value = v;
-			// @TODO: report failures
-			return true;
+			return false;
 		}
 
 		private static bool ReadLengthOp(BinaryReader input, out uint len, out SpvOp op)

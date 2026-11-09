@@ -39,6 +39,8 @@ namespace AnimeStudio
                     needSearch = false;
                     return reader;
                 }
+                if (assetsFile.assetsManager.ExplicitResourcesOnly)
+                    throw new FileNotFoundException($"Resource was not explicitly registered: {resourceFileName}");
                 var assetsFileDirectory = Path.GetDirectoryName(assetsFile.fullName);
                 var resourceFilePath = Path.Combine(assetsFileDirectory, resourceFileName);
                 if (!File.Exists(resourceFilePath))

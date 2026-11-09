@@ -52,7 +52,7 @@ namespace AnimeStudio
                 file.fileName = Path.GetFileName(data.path);
                 reader.BaseStream.Position = data.dataOffset;
                 file.stream = new MemoryStream(reader.ReadBytes(data.dataLength));
-                fileList[i] = file;
+                fileList.Add(file);
             }
         }
     }

@@ -49,9 +49,15 @@ namespace AnimeStudio
 
         private static string ExportSnippet(Stream stream, int offset, int size)
         {
+            if (offset < 0 || size < 24 || (long)offset + size > stream.Length)
+                throw new InvalidDataException($"Invalid SMOL-V snippet range: offset {offset}, size {size}, program length {stream.Length}.");
             stream.Position = offset;
+            using var header = new BinaryReader(stream, Encoding.UTF8, true);
+            var magic=header.ReadUInt32(); var encodingVersion=header.ReadUInt32();
+            stream.Position=offset;
+            if(magic!=SmolvDecoder.SmolHeaderMagic) throw new InvalidDataException($"Invalid SMOL-V magic 0x{magic:x8} at program offset {offset}.");
             int decodedSize = SmolvDecoder.GetDecodedBufferSize(stream);
-            if (decodedSize == 0)
+            if (decodedSize <= 0 || decodedSize > 268_435_456)
             {
                 throw new Exception("Invalid SMOL-V shader header");
             }
@@ -66,7 +72,7 @@ namespace AnimeStudio
                 }
                 else
                 {
-                    throw new Exception("Unable to decode SMOL-V shader");
+                    throw new Exception($"Unable to decode SMOL-V shader: encoded version 0x{encodingVersion:x8}, program offset {offset}, compressed bytes {size}, decoded bytes {decodedSize}");
                 }
             }
         }
