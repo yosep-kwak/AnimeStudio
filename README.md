@@ -35,6 +35,8 @@ AnimeStudio.CLI.exe <input> <output> --game GI --types Texture2D,Sprite --export
 
 Useful flags are `--game`, `--types`, `--names` and `--containers` for filtering, `--group_assets` for the output folder layout, `--map_op` and `--map_type` for building asset maps, and `--silent` to keep it quiet. Run it without arguments for the full list.
 
+Automation clients can run `AnimeStudio.CLI.exe --capabilities-json` without an asset path. It prints one versioned JSON object with the CLI assembly version, the running .NET framework and process architecture, and the CLI's export modes and asset-map formats. The probe does not initialize game profiles or load native exporters. Native export readiness is `unprobed` and clip intermediate representation is `unsupported` by this CLI.
+
 The [official wiki](https://github.com/Escartem/AnimeStudio/wiki) goes into detail on all of this. If something isn't covered there, look at the [original tutorial by Modder4869](https://gist.github.com/Modder4869/0f5371f8879607eb95b8e63badca227e) or the [original readme](https://github.com/RazTools/Studio/blob/main/README.md). Otherwise [join the discord](https://discord.gg/fzRdtVh) and ask there !
 
 ---

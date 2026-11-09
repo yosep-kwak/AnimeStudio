@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using AnimeStudio.CLI.Properties;
 using Newtonsoft.Json;
@@ -11,7 +12,44 @@ namespace AnimeStudio.CLI
 {
     public class Program
     {
-        public static void Main(string[] args) => CommandLine.Init(args);
+        public static int Main(string[] args)
+        {
+            if (args.Length == 0 || args[0] != "--capabilities-json")
+            {
+                CommandLine.Init(args);
+                return 0;
+            }
+
+            if (args.Length != 1)
+            {
+                Console.WriteLine(JsonConvert.SerializeObject(new
+                {
+                    schema_version = 1,
+                    error = new { code = "unexpected_arguments", message = "--capabilities-json takes no arguments." }
+                }));
+                return 2;
+            }
+
+            Console.WriteLine(JsonConvert.SerializeObject(new
+            {
+                schema_version = 1,
+                program = "AnimeStudio.CLI",
+                assembly_version = typeof(Program).Assembly.GetName().Version?.ToString(),
+                runtime = new
+                {
+                    framework = RuntimeInformation.FrameworkDescription,
+                    architecture = RuntimeInformation.ProcessArchitecture.ToString()
+                },
+                asset_export = new { modes = Enum.GetNames<ExportType>() },
+                asset_map = new
+                {
+                    formats = Enum.GetNames<ExportListType>().Where(name => name != nameof(ExportListType.None))
+                },
+                native_export = "unprobed",
+                clip_ir = "unsupported"
+            }));
+            return 0;
+        }
 
         public static void Run(Options o)
         {
