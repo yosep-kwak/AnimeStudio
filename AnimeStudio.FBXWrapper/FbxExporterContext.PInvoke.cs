@@ -175,6 +175,9 @@ namespace AnimeStudio.FbxInterop
         private static extern void AsFbxAnimApplyEulerFilter(IntPtr pAnimContext, float filterPrecision);
 
         [DllImport(FbxDll.DllName)]
+        private static extern void AsFbxAnimSetLinearInterpolation(IntPtr pAnimContext);
+
+        [DllImport(FbxDll.DllName)]
         private static extern int AsFbxAnimGetCurrentBlendShapeChannelCount(IntPtr pAnimContext, IntPtr pNode);
 
         [DllImport(FbxDll.DllName)]

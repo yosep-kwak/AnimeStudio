@@ -809,6 +809,11 @@ namespace AnimeStudio
                 iAnim.SampleRate = animationClip.m_SampleRate;
                 iAnim.TrackList = new List<ImportedAnimationKeyframedTrack>();
                 AnimationList.Add(iAnim);
+                if (options.unityGenericResampleRate > 0)
+                {
+                    ConvertUnityGenericAnimation(iAnim, animationClip);
+                    continue;
+                }
                 if (animationClip.m_Legacy)
                 {
                     foreach (var m_CompressedRotationCurve in animationClip.m_CompressedRotationCurves)
@@ -977,6 +982,102 @@ namespace AnimeStudio
                         }
                     }
                 }
+            }
+        }
+
+        // Unity's generic Euler curves use ZXY; the FBX nodes use XYZ. Evaluate the original
+        // streamed cubics before converting to quaternion, instead of relabelling raw Euler keys.
+        // This bounded, opt-in profile leaves the original exporter behavior available.
+        private void ConvertUnityGenericAnimation(ImportedKeyframedAnimation animation, AnimationClip source)
+        {
+            var clip = source.m_MuscleClip?.m_Clip;
+            var bindings = source.m_ClipBindingConstant?.genericBindings;
+            if (source.m_Legacy || clip == null || bindings == null || clip.m_ACLClip.IsSet || source.m_AclCompressedBuffer != null)
+                throw new NotSupportedException("Unity generic resampling requires uncompressed generic curve bindings.");
+            var rate = options.unityGenericResampleRate;
+            var begin = source.m_MuscleClip.m_StartTime;
+            var end = source.m_MuscleClip.m_StopTime;
+            if (rate < 60 || rate > 1000 || !float.IsFinite(begin) || !float.IsFinite(end) || end < begin || (end - begin) * rate > 120000)
+                throw new NotSupportedException("Unity generic resampling exceeds its time/rate budget.");
+            var stream = clip.m_StreamedClip;
+            var dense = clip.m_DenseClip;
+            var constants = clip.m_ConstantClip?.data ?? Array.Empty<float>();
+            int Width(GenericBinding binding) => binding.typeID == ClassIDType.Transform
+                ? binding.attribute == 2 ? 4 : binding.attribute == 1 || binding.attribute == 3 || binding.attribute == 4 ? 3 : 1 : 1;
+            var count = bindings.Sum(Width);
+            if ((long)stream.curveCount + dense.m_CurveCount + constants.Length != count || count > 100000 ||
+                dense.m_FrameCount < 0 || (long)dense.m_FrameCount * dense.m_CurveCount != dense.m_SampleArray.Length ||
+                (dense.m_CurveCount > 0 && (!float.IsFinite(dense.m_SampleRate) || dense.m_SampleRate <= 0)))
+                throw new NotSupportedException("Unity generic scalar curve layout is inconsistent.");
+            var curves = Enumerable.Range(0, count).Select(_ => new List<(float Time, float Value, float[] Coefficients)>()).ToArray();
+            foreach (var frame in stream.ReadData())
+            {
+                // The -infinity/+infinity records are sentinels, not samples.
+                if (!float.IsFinite(frame.time)) continue;
+                foreach (var key in frame.keyList)
+                {
+                    if (key.index < 0 || key.index >= stream.curveCount || key.coeff.Any(value => !float.IsFinite(value)))
+                        throw new NotSupportedException("Unity generic streamed channel is invalid.");
+                    curves[key.index].Add((frame.time, key.value, key.coeff));
+                }
+            }
+            for (int frame = 0; frame < dense.m_FrameCount; frame++)
+                for (int channel = 0; channel < dense.m_CurveCount; channel++)
+                    curves[stream.curveCount + channel].Add((dense.m_BeginTime + frame / dense.m_SampleRate,
+                        dense.m_SampleArray[frame * dense.m_CurveCount + channel], null));
+            for (int channel = 0; channel < constants.Length; channel++)
+                curves[stream.curveCount + dense.m_CurveCount + channel].Add((begin, constants[channel], null));
+            foreach (var curve in curves)
+                if (curve.Count == 0 || curve.Any(key => !float.IsFinite(key.Value)) || curve.Zip(curve.Skip(1), (a, b) => a.Time >= b.Time).Any(value => value))
+                    throw new NotSupportedException("Unity generic curve is empty, non-finite, or nonmonotonic.");
+            var times = new SortedSet<float>(curves.SelectMany(curve => curve).Select(key => key.Time).Where(time => time >= begin && time <= end)) { begin, end };
+            for (int index = 0; index <= (int)Math.Ceiling((end - begin) * rate); index++) times.Add(Math.Min(end, begin + index / (float)rate));
+            if ((long)times.Count * count > 20000000) throw new NotSupportedException("Unity generic resampling exceeds its scalar sample budget.");
+            float Evaluate(int index, float time)
+            {
+                var curve = curves[index];
+                if (time <= curve[0].Time) return curve[0].Value;
+                if (time >= curve[curve.Count - 1].Time) return curve[curve.Count - 1].Value;
+                var right = curve.FindIndex(key => key.Time > time);
+                var left = curve[right - 1];
+                double delta = time - left.Time;
+                var coefficients = left.Coefficients;
+                return coefficients == null
+                    ? (float)(left.Value + (curve[right].Value - left.Value) * delta / (curve[right].Time - left.Time))
+                    : (float)(((coefficients[0] * delta + coefficients[1]) * delta + coefficients[2]) * delta + coefficients[3]);
+            }
+            int offset = 0;
+            foreach (var binding in bindings)
+            {
+                var width = Width(binding);
+                if (binding.typeID == ClassIDType.Transform && binding.attribute >= 1 && binding.attribute <= 4)
+                {
+                    var path = FixBonePath(GetPathFromHash(binding.path));
+                    if (string.IsNullOrEmpty(path) || path.StartsWith("unknown ", StringComparison.Ordinal))
+                        throw new NotSupportedException("Unity generic transform binding is unresolved.");
+                    var track = animation.FindTrack(path);
+                    track.LinearInterpolation = true;
+                    foreach (var time in times)
+                    {
+                        var values = Enumerable.Range(offset, width).Select(index => Evaluate(index, time)).ToArray();
+                        if (values.Any(value => !float.IsFinite(value))) throw new NotSupportedException("Unity generic sample is non-finite.");
+                        if (binding.attribute == 4)
+                        {
+                            var x = values[0] * Math.PI / 360; var y = values[1] * Math.PI / 360; var z = values[2] * Math.PI / 360;
+                            var sx = Math.Sin(x); var cx = Math.Cos(x); var sy = Math.Sin(y); var cy = Math.Cos(y); var sz = Math.Sin(z); var cz = Math.Cos(z);
+                            // qY * qX * qZ, followed by the exporter MirrorX basis.
+                            track.Rotations.Add(new ImportedKeyframe<Quaternion>(time, new Quaternion(
+                                (float)(cy * sx * cz + sy * cx * sz), (float)(cy * sx * sz - sy * cx * cz),
+                                (float)(sy * sx * cz - cy * cx * sz), (float)(cy * cx * cz + sy * sx * sz))));
+                        }
+                        else
+                        {
+                            int component = 0;
+                            ReadCurveData(animation, source.m_ClipBindingConstant, offset, time, values, 0, ref component);
+                        }
+                    }
+                }
+                offset += width;
             }
         }
 
@@ -1176,6 +1277,7 @@ namespace AnimeStudio
             public Game game;
             public bool collectAnimations;
             public bool exportMaterials;
+            public int unityGenericResampleRate;
             public HashSet<Material> materials;
             public Dictionary<string, (bool, int)> uvs;
             public Dictionary<string, int> texs; 

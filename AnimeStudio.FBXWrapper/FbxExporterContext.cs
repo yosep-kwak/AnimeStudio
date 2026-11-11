@@ -567,6 +567,10 @@ namespace AnimeStudio.FbxInterop
                 {
                     AsFbxAnimApplyEulerFilter(pAnimContext, _exportOptions.filterPrecision);
                 }
+                if (track.LinearInterpolation)
+                {
+                    AsFbxAnimSetLinearInterpolation(pAnimContext);
+                }
 
                 var blendShape = track.BlendShape;
 

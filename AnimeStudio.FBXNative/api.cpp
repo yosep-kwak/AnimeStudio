@@ -941,6 +941,22 @@ AS_API(void) AsFbxAnimAddTranslationKey(AsFbxAnimContext* pAnimContext, float ti
 	pAnimContext->lCurveTZ->KeySet(pAnimContext->lCurveTZ->KeyAdd(lTime), lTime, z);
 }
 
+AS_API(void) AsFbxAnimSetLinearInterpolation(AsFbxAnimContext* pAnimContext)
+{
+	if (pAnimContext == nullptr) return;
+	FbxAnimCurve* curves[] = {pAnimContext->lCurveSX, pAnimContext->lCurveSY, pAnimContext->lCurveSZ,
+		pAnimContext->lCurveRX, pAnimContext->lCurveRY, pAnimContext->lCurveRZ,
+		pAnimContext->lCurveTX, pAnimContext->lCurveTY, pAnimContext->lCurveTZ};
+	for (auto curve : curves)
+	{
+		if (curve == nullptr) continue;
+		curve->KeyModifyBegin();
+		for (int index = 0; index < curve->KeyGetCount(); ++index)
+			curve->KeySetInterpolation(index, FbxAnimCurveDef::eInterpolationLinear);
+		curve->KeyModifyEnd();
+	}
+}
+
 AS_API(void) AsFbxAnimApplyEulerFilter(AsFbxAnimContext* pAnimContext, float filterPrecision)
 {
 	if (pAnimContext == nullptr || pAnimContext->lFilter == nullptr)

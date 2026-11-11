@@ -255,6 +255,8 @@ namespace AnimeStudio
     public class ImportedAnimationKeyframedTrack
     {
         public string Path { get; set; }
+        // Opt-in for uniformly sampled source curves; legacy exports retain FBX's default tangents.
+        public bool LinearInterpolation { get; set; }
         public List<ImportedKeyframe<Vector3>> Scalings = new List<ImportedKeyframe<Vector3>>();
         public List<ImportedKeyframe<Quaternion>> Rotations = new List<ImportedKeyframe<Quaternion>>();
         public List<ImportedKeyframe<Vector3>> EulerRotations = new List<ImportedKeyframe<Vector3>>();
