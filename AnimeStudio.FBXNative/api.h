@@ -137,6 +137,8 @@ AS_API(void) AsFbxAnimAddTranslationKey(AsFbxAnimContext* pAnimContext, float ti
 AS_API(void) AsFbxAnimApplyEulerFilter(AsFbxAnimContext* pAnimContext, float filterPrecision);
 
 AS_API(void) AsFbxAnimSetLinearInterpolation(AsFbxAnimContext* pAnimContext);
+AS_API(void) AsFbxAnimSetLinearRotationInterpolation(AsFbxAnimContext* pAnimContext);
+AS_API(void) AsFbxAnimSetVectorTangents(AsFbxAnimContext* pAnimContext, int attribute, float time, float inX, float inY, float inZ, float outX, float outY, float outZ);
 
 AS_API(int32_t) AsFbxAnimGetCurrentBlendShapeChannelCount(AsFbxAnimContext* pAnimContext, fbxsdk::FbxNode* pNode);
 

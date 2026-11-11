@@ -880,7 +880,7 @@ namespace AnimeStudio
                             var track = iAnim.FindTrack(FixBonePath(animationClip, m_EulerCurve.path));
                             foreach (var m_Curve in m_EulerCurve.curve.m_Curve)
                             {
-                                track.EulerRotations.Add(new ImportedKeyframe<Vector3>(m_Curve.time, new Vector3(m_Curve.value.X, -m_Curve.value.Y, -m_Curve.value.Z)));
+                                track.Rotations.Add(new ImportedKeyframe<Quaternion>(m_Curve.time, Fbx.UnityEulerToExportQuaternion(m_Curve.value)));
                             }
                         }
                     }
@@ -980,14 +980,17 @@ namespace AnimeStudio
                             time2 = animationClip.m_MuscleClip.m_StopTime;
                         }
                     }
+                    // Preserve Generic vector cubics; adapt rotations from their source evaluator
+                    // using Unity's ZXY order and continuous FBX XYZ Euler interpolation.
+                    if (!m_ACLClip.IsSet && animationClip.m_AclCompressedBuffer == null && animationClip.m_ClipBindingConstant != null)
+                        ConvertUnityGenericAnimation(iAnim, animationClip, preserveGenericCurves: true);
                 }
             }
         }
 
-        // Unity's generic Euler curves use ZXY; the FBX nodes use XYZ. Evaluate the original
-        // streamed cubics before converting to quaternion, instead of relabelling raw Euler keys.
-        // This bounded, opt-in profile leaves the original exporter behavior available.
-        private void ConvertUnityGenericAnimation(ImportedKeyframedAnimation animation, AnimationClip source)
+        // Share the serialized Generic curve evaluator between fixed-rate opt-in exports and
+        // legacy's cubic-vector/adaptive-rotation conversion. These remain distinct strategies.
+        private void ConvertUnityGenericAnimation(ImportedKeyframedAnimation animation, AnimationClip source, bool preserveGenericCurves = false)
         {
             var clip = source.m_MuscleClip?.m_Clip;
             var bindings = source.m_ClipBindingConstant?.genericBindings;
@@ -996,7 +999,7 @@ namespace AnimeStudio
             var rate = options.unityGenericResampleRate;
             var begin = source.m_MuscleClip.m_StartTime;
             var end = source.m_MuscleClip.m_StopTime;
-            if (rate < 60 || rate > 1000 || !float.IsFinite(begin) || !float.IsFinite(end) || end < begin || (end - begin) * rate > 120000)
+            if ((!preserveGenericCurves && (rate < 60 || rate > 1000)) || !float.IsFinite(begin) || !float.IsFinite(end) || end < begin || (end - begin) * Math.Max(rate,60) > 120000)
                 throw new NotSupportedException("Unity generic resampling exceeds its time/rate budget.");
             var stream = clip.m_StreamedClip;
             var dense = clip.m_DenseClip;
@@ -1030,7 +1033,8 @@ namespace AnimeStudio
                 if (curve.Count == 0 || curve.Any(key => !float.IsFinite(key.Value)) || curve.Zip(curve.Skip(1), (a, b) => a.Time >= b.Time).Any(value => value))
                     throw new NotSupportedException("Unity generic curve is empty, non-finite, or nonmonotonic.");
             var times = new SortedSet<float>(curves.SelectMany(curve => curve).Select(key => key.Time).Where(time => time >= begin && time <= end)) { begin, end };
-            for (int index = 0; index <= (int)Math.Ceiling((end - begin) * rate); index++) times.Add(Math.Min(end, begin + index / (float)rate));
+            if (!preserveGenericCurves)
+                for (int index = 0; index <= (int)Math.Ceiling((end - begin) * rate); index++) times.Add(Math.Min(end, begin + index / (float)rate));
             if ((long)times.Count * count > 20000000) throw new NotSupportedException("Unity generic resampling exceeds its scalar sample budget.");
             float Evaluate(int index, float time)
             {
@@ -1046,9 +1050,77 @@ namespace AnimeStudio
                     : (float)(((coefficients[0] * delta + coefficients[1]) * delta + coefficients[2]) * delta + coefficients[3]);
             }
             int offset = 0;
+            long rotationScalarSamples = 0;
+            var convertedRotationPaths = new HashSet<string>(StringComparer.Ordinal);
             foreach (var binding in bindings)
             {
                 var width = Width(binding);
+                if (preserveGenericCurves)
+                {
+                    if (binding.typeID == ClassIDType.Transform && (binding.attribute == 2 || binding.attribute == 4))
+                    {
+                        var path = ResolveTransformBindingPath(binding);
+                        // Legacy may contain unrelated or ambiguous bindings; never redirect one.
+                        if (!string.IsNullOrEmpty(path) && !path.StartsWith("unknown ",StringComparison.Ordinal))
+                        {
+                            if (!convertedRotationPaths.Add(path)) throw new NotSupportedException("Ambiguous Generic rotation bindings target the same Transform.");
+                            var track = animation.FindTrack(path);
+                            Quaternion EvaluateRotation(float time)
+                            {
+                                var values = Enumerable.Range(offset,width).Select(index=>Evaluate(index,time)).ToArray();
+                                if(binding.attribute==2)return new Quaternion(values[0],-values[1],-values[2],values[3]);
+                                return Fbx.UnityEulerToExportQuaternion(new Vector3(values[0],values[1],values[2]));
+                            }
+                            var rotationTimes=curves.Skip(offset).Take(width).SelectMany(c=>c).Select(k=>k.Time).Where(t=>t>=begin&&t<=end).Concat(new[]{begin,end});
+                            track.EulerRotations=Fbx.SampleRotation(EvaluateRotation,rotationTimes);
+                            rotationScalarSamples += (long)track.EulerRotations.Count * 3;
+                            if (rotationScalarSamples > 20000000) throw new NotSupportedException("Legacy rotation conversion exceeds scalar sample budget.");
+                            track.Rotations.Clear();track.LinearRotationInterpolation=true;
+                        }
+                    }
+                    else if (binding.typeID == ClassIDType.Transform && (binding.attribute == 1 || binding.attribute == 3))
+                    {
+                        var path = ResolveTransformBindingPath(binding);
+                        if (!string.IsNullOrEmpty(path) && !path.StartsWith("unknown ",StringComparison.Ordinal))
+                        {
+                            var track=animation.FindTrack(path);
+                            // A discontinuous polynomial cannot be represented by ordinary FBX
+                            // Hermite endpoint tangents. Reject it instead of smoothing the jump.
+                            foreach(var curve in curves.Skip(offset).Take(width))
+                                for(int key=0;key+1<curve.Count;key++)
+                                {
+                                    var left=curve[key];var right=curve[key+1];var c=left.Coefficients;
+                                    if(c==null||left.Time<begin||right.Time>end)continue;
+                                    double dt=right.Time-left.Time;
+                                    var endpoint=((c[0]*dt+c[1])*dt+c[2])*dt+c[3];
+                                    if(Math.Abs(endpoint-right.Value)>1e-5*Math.Max(1,Math.Abs(right.Value)))
+                                        throw new NotSupportedException("Discontinuous Generic vector curves require explicit step conversion.");
+                                }
+                            float Slope(int channel,float time,bool fromLeft)
+                            {
+                                var curve=curves[channel];
+                                var index=curve.FindLastIndex(k=>fromLeft?k.Time<time:k.Time<=time);
+                                if(index<0||index>=curve.Count-1)return 0;
+                                var left=curve[index];var right=curve[index+1];
+                                double delta=time-left.Time;var c=left.Coefficients;
+                                var slope=c==null?(right.Value-left.Value)/(right.Time-left.Time):(float)((3*c[0]*delta+2*c[1])*delta+c[2]);
+                                if(!float.IsFinite(slope))throw new NotSupportedException("Non-finite source vector tangent.");
+                                return slope;
+                            }
+                            Vector3 Mirror(float x,float y,float z)
+                            {
+                                if(!float.IsFinite(x)||!float.IsFinite(y)||!float.IsFinite(z))throw new NotSupportedException("Non-finite Generic vector value or tangent.");
+                                return new Vector3(binding.attribute==1?-x:x,y,z);
+                            }
+                            var vectorTimes=curves.Skip(offset).Take(width).SelectMany(c=>c).Select(k=>k.Time).Where(t=>t>=begin&&t<=end).Concat(new[]{begin,end}).Distinct().OrderBy(t=>t);
+                            var keys=vectorTimes.Select(t=>new ImportedKeyframe<Vector3>(t,Mirror(Evaluate(offset,t),Evaluate(offset+1,t),Evaluate(offset+2,t)))
+                            {HasTangents=true,InSlope=Mirror(Slope(offset,t,true),Slope(offset+1,t,true),Slope(offset+2,t,true)),OutSlope=Mirror(Slope(offset,t,false),Slope(offset+1,t,false),Slope(offset+2,t,false))}).ToList();
+                            if(binding.attribute==1)track.Translations=keys;else track.Scalings=keys;
+                        }
+                    }
+                    offset += width;
+                    continue;
+                }
                 if (IsBlendShapeBinding(binding))
                 {
                     var track = FindBlendShapeTrack(animation, FindBlendShapeFrame(source, binding.path), binding,
@@ -1078,12 +1150,7 @@ namespace AnimeStudio
                         if (values.Any(value => !float.IsFinite(value))) throw new NotSupportedException("Unity generic sample is non-finite.");
                         if (binding.attribute == 4)
                         {
-                            var x = values[0] * Math.PI / 360; var y = values[1] * Math.PI / 360; var z = values[2] * Math.PI / 360;
-                            var sx = Math.Sin(x); var cx = Math.Cos(x); var sy = Math.Sin(y); var cy = Math.Cos(y); var sz = Math.Sin(z); var cz = Math.Cos(z);
-                            // qY * qX * qZ, followed by the exporter MirrorX basis.
-                            track.Rotations.Add(new ImportedKeyframe<Quaternion>(time, new Quaternion(
-                                (float)(cy * sx * cz + sy * cx * sz), (float)(cy * sx * sz - sy * cx * cz),
-                                (float)(sy * sx * cz - cy * cx * sz), (float)(cy * cx * cz + sy * sx * sz))));
+                            track.Rotations.Add(new ImportedKeyframe<Quaternion>(time,Fbx.UnityEulerToExportQuaternion(new Vector3(values[0],values[1],values[2]))));
                         }
                         else
                         {
@@ -1140,12 +1207,12 @@ namespace AnimeStudio
                         )));
                         break;
                     case 4:
-                        track.EulerRotations.Add(new ImportedKeyframe<Vector3>(time, new Vector3
+                        track.Rotations.Add(new ImportedKeyframe<Quaternion>(time, Fbx.UnityEulerToExportQuaternion(new Vector3
                         (
                             data[curveIndex++ + offset],
-                            -data[curveIndex++ + offset],
-                            -data[curveIndex++ + offset]
-                        )));
+                            data[curveIndex++ + offset],
+                            data[curveIndex++ + offset]
+                        ))));
                         break;
                     default:
                         curveIndex++;

@@ -191,6 +191,13 @@ namespace AnimeStudio.FbxInterop
         [DllImport(FbxDll.DllName)]
         private static extern void AsFbxAnimSetLinearInterpolation(IntPtr pAnimContext);
 
+        [DllImport(FbxDll.DllName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void AsFbxAnimSetLinearRotationInterpolation(IntPtr pAnimContext);
+
+        [DllImport(FbxDll.DllName)]
+        private static extern void AsFbxAnimSetVectorTangents(IntPtr pAnimContext, int attribute, float time,
+            float inX, float inY, float inZ, float outX, float outY, float outZ);
+
         [DllImport(FbxDll.DllName)]
         private static extern int AsFbxAnimGetCurrentBlendShapeChannelCount(IntPtr pAnimContext, IntPtr pNode);
 

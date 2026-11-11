@@ -560,10 +560,14 @@ namespace AnimeStudio.FbxInterop
                     AsFbxAnimAddScalingKey(pAnimContext, scaling.time, value.X, value.Y, value.Z);
                 }
 
+                Vector3? previousRotation = null;
                 foreach (var rotation in track.Rotations)
                 {
                     var value = Fbx.QuaternionToEuler(rotation.value);
+                    if (previousRotation.HasValue)
+                        value = Fbx.ContinuousEuler(value, previousRotation.Value);
                     AsFbxAnimAddRotationKey(pAnimContext, rotation.time, value.X, value.Y, value.Z);
+                    previousRotation = value;
                 }
 
                 foreach (var rotation in track.EulerRotations)
@@ -577,6 +581,16 @@ namespace AnimeStudio.FbxInterop
                     AsFbxAnimAddTranslationKey(pAnimContext, translation.time, value.X, value.Y, value.Z);
                 }
 
+                void Tangents(IEnumerable<ImportedKeyframe<Vector3>> keys, int attribute)
+                {
+                    foreach (var key in keys)
+                        if (key.HasTangents)
+                            AsFbxAnimSetVectorTangents(pAnimContext, attribute, key.time,
+                                key.InSlope.X, key.InSlope.Y, key.InSlope.Z, key.OutSlope.X, key.OutSlope.Y, key.OutSlope.Z);
+                }
+                Tangents(track.Translations, 1);
+                Tangents(track.Scalings, 3);
+
                 AsFbxAnimEndKeyModify(pAnimContext);
 
                 if (track.EulerRotations.Count == 0)
@@ -586,6 +600,10 @@ namespace AnimeStudio.FbxInterop
                 if (track.LinearInterpolation)
                 {
                     AsFbxAnimSetLinearInterpolation(pAnimContext);
+                }
+                else if (track.LinearRotationInterpolation)
+                {
+                    AsFbxAnimSetLinearRotationInterpolation(pAnimContext);
                 }
 
                 var blendShape = track.BlendShape;
@@ -619,6 +637,7 @@ namespace AnimeStudio.FbxInterop
                 }
             }
         }
+
 
         internal void ExportMorphs(ImportedFrame rootFrame, List<ImportedMesh> meshList, List<ImportedMorph> morphList)
         {

@@ -982,6 +982,41 @@ AS_API(void) AsFbxAnimSetLinearInterpolation(AsFbxAnimContext* pAnimContext)
 	}
 }
 
+AS_API(void) AsFbxAnimSetVectorTangents(AsFbxAnimContext* pAnimContext, int attribute, float time, float inX, float inY, float inZ, float outX, float outY, float outZ)
+{
+	if (pAnimContext == nullptr || (attribute != 1 && attribute != 3)) return;
+	FbxAnimCurve* curves[] = {attribute == 1 ? pAnimContext->lCurveTX : pAnimContext->lCurveSX,
+		attribute == 1 ? pAnimContext->lCurveTY : pAnimContext->lCurveSY,
+		attribute == 1 ? pAnimContext->lCurveTZ : pAnimContext->lCurveSZ};
+	float left[] = {inX, inY, inZ}, right[] = {outX, outY, outZ};
+	FbxTime keyTime; keyTime.SetSecondDouble(time);
+	for (int axis = 0; axis < 3; ++axis)
+	{
+		auto curve = curves[axis];
+		if (curve == nullptr) continue;
+		const int index = static_cast<int>(curve->KeyFind(keyTime));
+		if (index < 0) continue;
+		curve->KeySetInterpolation(index, FbxAnimCurveDef::eInterpolationCubic);
+		curve->KeySetTangentMode(index, FbxAnimCurveDef::eTangentBreak);
+		curve->KeySetLeftDerivative(index, left[axis]);
+		curve->KeySetRightDerivative(index, right[axis]);
+	}
+}
+
+AS_API(void) AsFbxAnimSetLinearRotationInterpolation(AsFbxAnimContext* pAnimContext)
+{
+	if (pAnimContext == nullptr) return;
+	FbxAnimCurve* curves[] = {pAnimContext->lCurveRX, pAnimContext->lCurveRY, pAnimContext->lCurveRZ};
+	for (auto curve : curves)
+	{
+		if (curve == nullptr) continue;
+		curve->KeyModifyBegin();
+		for (int index = 0; index < curve->KeyGetCount(); ++index)
+			curve->KeySetInterpolation(index, FbxAnimCurveDef::eInterpolationLinear);
+		curve->KeyModifyEnd();
+	}
+}
+
 AS_API(void) AsFbxAnimApplyEulerFilter(AsFbxAnimContext* pAnimContext, float filterPrecision)
 {
 	if (pAnimContext == nullptr || pAnimContext->lFilter == nullptr)

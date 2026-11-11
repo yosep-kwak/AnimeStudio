@@ -275,8 +275,9 @@ namespace AnimeStudio
     public class ImportedAnimationKeyframedTrack
     {
         public string Path { get; set; }
-        // Opt-in for uniformly sampled source curves; legacy exports retain FBX's default tangents.
+        // Fixed-rate conversion uses linear curves; legacy Generic vectors carry source tangents.
         public bool LinearInterpolation { get; set; }
+        public bool LinearRotationInterpolation { get; set; }
         public List<ImportedKeyframe<Vector3>> Scalings = new List<ImportedKeyframe<Vector3>>();
         public List<ImportedKeyframe<Quaternion>> Rotations = new List<ImportedKeyframe<Quaternion>>();
         public List<ImportedKeyframe<Vector3>> EulerRotations = new List<ImportedKeyframe<Vector3>>();
@@ -288,6 +289,9 @@ namespace AnimeStudio
     {
         public float time { get; set; }
         public T value { get; set; }
+        public bool HasTangents { get; set; }
+        public T InSlope { get; set; }
+        public T OutSlope { get; set; }
 
         public ImportedKeyframe(float time, T value)
         {
