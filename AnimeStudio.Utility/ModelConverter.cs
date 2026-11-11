@@ -1067,7 +1067,7 @@ namespace AnimeStudio
                 }
                 else if (binding.typeID == ClassIDType.Transform && binding.attribute >= 1 && binding.attribute <= 4)
                 {
-                    var path = FixBonePath(GetPathFromHash(binding.path));
+                    var path = ResolveTransformBindingPath(binding);
                     if (string.IsNullOrEmpty(path) || path.StartsWith("unknown ", StringComparison.Ordinal))
                         throw new NotSupportedException("Unity generic transform binding is unresolved.");
                     var track = animation.FindTrack(path);
@@ -1088,7 +1088,7 @@ namespace AnimeStudio
                         else
                         {
                             int component = 0;
-                            ReadCurveData(animation, source.m_ClipBindingConstant, offset, time, values, 0, ref component);
+                            ReadCurveData(animation, source.m_ClipBindingConstant, offset, time, values, 0, ref component, path);
                         }
                     }
                 }
@@ -1096,7 +1096,7 @@ namespace AnimeStudio
             }
         }
 
-        private void ReadCurveData(ImportedKeyframedAnimation iAnim, AnimationClipBindingConstant m_ClipBindingConstant, int index, float time, float[] data, int offset, ref int curveIndex)
+        private void ReadCurveData(ImportedKeyframedAnimation iAnim, AnimationClipBindingConstant m_ClipBindingConstant, int index, float time, float[] data, int offset, ref int curveIndex, string verifiedPath = null)
         {
             var binding = m_ClipBindingConstant.FindBinding(index);
             if (IsBlendShapeBinding(binding))
@@ -1109,7 +1109,7 @@ namespace AnimeStudio
             }
             else if (binding.typeID == ClassIDType.Transform)
             {
-                var path = FixBonePath(GetPathFromHash(binding.path));
+                var path = verifiedPath ?? ResolveTransformBindingPath(binding);
                 var track = iAnim.FindTrack(path);
 
                 switch (binding.attribute)
@@ -1156,6 +1156,12 @@ namespace AnimeStudio
             {
                 curveIndex++;
             }
+        }
+
+        private string ResolveTransformBindingPath(GenericBinding binding)
+        {
+            // Unity serializes the animation root as the empty-path hash (zero).
+            return binding.path == 0 ? animationRoot?.Path : FixBonePath(GetPathFromHash(binding.path));
         }
 
         private string GetPathFromHash(uint hash)
