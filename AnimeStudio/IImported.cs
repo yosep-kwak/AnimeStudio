@@ -17,6 +17,7 @@ namespace AnimeStudio
     public class ImportedFrame
     {
         public string Name { get; set; }
+        public string SourceIdentity { get; set; }
         public Quaternion LocalRotation { get; set; }
         public Vector3 LocalPosition { get; set; }
         public Vector3 LocalScale { get; set; }
@@ -71,6 +72,22 @@ namespace AnimeStudio
                 }
             }
             return null;
+        }
+
+        public ImportedFrame FindUniqueFrameByPath(string path, bool fullPath = false)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            var name = path.Substring(path.LastIndexOf('/') + 1);
+            var suffix = "/" + path;
+            ImportedFrame match = null;
+            foreach (var frame in FindChilds(name))
+            {
+                var candidate = frame.Path;
+                if (candidate != path && (fullPath || !candidate.EndsWith(suffix, StringComparison.Ordinal))) continue;
+                if (match != null) return null;
+                match = frame;
+            }
+            return match;
         }
 
         public ImportedFrame FindRelativeFrameWithPath(string path)
@@ -154,6 +171,8 @@ namespace AnimeStudio
     public class ImportedMesh
     {
         public string Path { get; set; }
+        public ImportedFrame SourceFrame { get; set; }
+        public string SourceIdentity { get; set; }
         public List<ImportedVertex> VertexList { get; set; }
         public List<ImportedSubmesh> SubmeshList { get; set; }
         public List<ImportedBone> BoneList { get; set; }
@@ -190,6 +209,7 @@ namespace AnimeStudio
     public class ImportedBone
     {
         public string Path { get; set; }
+        public ImportedFrame SourceFrame { get; set; }
         public Matrix4x4 Matrix { get; set; }
     }
 
@@ -279,18 +299,23 @@ namespace AnimeStudio
     public class ImportedBlendShape
     {
         public string ChannelName;
+        public ImportedMesh SourceMesh;
         public List<ImportedKeyframe<float>> Keyframes = new List<ImportedKeyframe<float>>();
     }
 
     public class ImportedMorph
     {
         public string Path { get; set; }
+        public ImportedMesh SourceMesh { get; set; }
         public List<ImportedMorphChannel> Channels { get; set; }
     }
 
     public class ImportedMorphChannel
     {
         public string Name { get; set; }
+        public string SourceName { get; set; }
+        public uint SourceNameHash { get; set; }
+        public uint SourceBindingHash { get; set; }
         public List<ImportedMorphKeyframe> KeyframeList { get; set; }
     }
 

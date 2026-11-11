@@ -100,7 +100,7 @@ namespace AnimeStudio.FbxInterop
 
         private void ExportMorphs()
         {
-            _context.ExportMorphs(_imported.RootFrame, _imported.MorphList);
+            _context.ExportMorphs(_imported.RootFrame, _imported.MeshList, _imported.MorphList);
         }
 
         private void ExportAnimations()
@@ -115,7 +115,7 @@ namespace AnimeStudio.FbxInterop
 
         private void ExportScene()
         {
-            _context.ExportScene();
+            _context.ExportScene(!string.IsNullOrEmpty(_imported.RootFrame.SourceIdentity));
         }
 
         private void SetJointsFromImportedMeshes()

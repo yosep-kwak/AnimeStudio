@@ -20,9 +20,13 @@ namespace AnimeStudio
         private HashSet<AnimationClip> animationClipHashSet = new HashSet<AnimationClip>();
         private Dictionary<AnimationClip, string> boundAnimationPathDic = new Dictionary<AnimationClip, string>();
         private Dictionary<uint, string> bonePathHash = new Dictionary<uint, string>();
+        private HashSet<uint> ambiguousBonePathHashes = new HashSet<uint>();
         private Dictionary<Texture2D, string> textureNameDictionary = new Dictionary<Texture2D, string>();
         private Dictionary<Transform, ImportedFrame> transformDictionary = new Dictionary<Transform, ImportedFrame>();
-        Dictionary<uint, string> morphChannelNames = new Dictionary<uint, string>();
+        private ImportedFrame animationRoot;
+        private readonly Dictionary<ImportedBlendShape, object> blendShapeBindings = new Dictionary<ImportedBlendShape, object>();
+        private readonly HashSet<ImportedBlendShape> ambiguousBlendShapes = new HashSet<ImportedBlendShape>();
+        public HashSet<string> UnresolvedBlendShapeBindings { get; } = new HashSet<string>(StringComparer.Ordinal);
 
         public ModelConverter(GameObject m_GameObject, Options options, AnimationClip[] animationList = null)
         {
@@ -149,6 +153,7 @@ namespace AnimeStudio
                 CreateBonePathHash(m_Transform);
             }
 
+            animationRoot = transformDictionary.GetValueOrDefault(m_Transform);
             ConvertMeshRenderer(m_Transform);
         }
 
@@ -228,6 +233,7 @@ namespace AnimeStudio
         {
             var frame = new ImportedFrame(trans.m_Children.Count);
             transformDictionary.Add(trans, frame);
+            frame.SourceIdentity = options.sourceIdentity?.Invoke(trans);
             trans.m_GameObject.TryGet(out var m_GameObject);
             frame.Name = m_GameObject.m_Name;
             SetFrame(frame, trans.m_LocalPosition, trans.m_LocalRotation, trans.m_LocalScale);
@@ -275,6 +281,8 @@ namespace AnimeStudio
             var iMesh = new ImportedMesh();
             meshR.m_GameObject.TryGet(out var m_GameObject2);
             iMesh.Path = GetTransformPath(m_GameObject2.m_Transform);
+            iMesh.SourceFrame = transformDictionary.GetValueOrDefault(m_GameObject2.m_Transform);
+            iMesh.SourceIdentity = options.sourceIdentity?.Invoke(meshR);
             iMesh.SubmeshList = new List<ImportedSubmesh>();
             var subHashSet = new HashSet<int>();
             var combine = false;
@@ -483,6 +491,8 @@ namespace AnimeStudio
                         if (sMesh.m_Bones[i].TryGet(out var m_Transform))
                         {
                             bone.Path = GetTransformPath(m_Transform);
+                            if (options.sourceIdentity != null)
+                                bone.SourceFrame = transformDictionary.GetValueOrDefault(m_Transform);
                         }
                         var convert = Matrix4x4.Scale(new Vector3(-1, 1, 1));
                         bone.Matrix = convert * mesh.m_BindPose[i] * convert;
@@ -511,6 +521,7 @@ namespace AnimeStudio
                     var morph = new ImportedMorph();
                     MorphList.Add(morph);
                     morph.Path = iMesh.Path;
+                    morph.SourceMesh = iMesh;
                     morph.Channels = new List<ImportedMorphChannel>(mesh.m_Shapes.channels.Count);
                     for (int i = 0; i < mesh.m_Shapes.channels.Count; i++)
                     {
@@ -522,11 +533,10 @@ namespace AnimeStudio
                         var crc = new SevenZip.CRC();
                         var bytes = Encoding.UTF8.GetBytes(blendShapeName);
                         crc.Update(bytes, 0, (uint)bytes.Length);
-                        morphChannelNames[crc.GetDigest()] = blendShapeName;
-
-                        morphChannelNames[shapeChannel.nameHash] = shapeChannel.name;
-
                         channel.Name = shapeChannel.name.Split('.').Last();
+                        channel.SourceName = shapeChannel.name;
+                        channel.SourceNameHash = shapeChannel.nameHash;
+                        channel.SourceBindingHash = crc.GetDigest();
                         channel.KeyframeList = new List<ImportedMorphKeyframe>(shapeChannel.frameCount);
                         var frameEnd = shapeChannel.frameIndex + shapeChannel.frameCount;
                         for (int frameIdx = shapeChannel.frameIndex; frameIdx < frameEnd; frameIdx++)
@@ -569,7 +579,7 @@ namespace AnimeStudio
             if (combine)
             {
                 meshR.m_GameObject.TryGet(out var m_GameObject);
-                var frame = RootFrame.FindChild(m_GameObject.m_Name);
+                var frame = options.sourceIdentity != null ? iMesh.SourceFrame : RootFrame.FindChild(m_GameObject.m_Name);
                 if (frame != null)
                 {
                     frame.LocalPosition = RootFrame.LocalPosition;
@@ -630,7 +640,7 @@ namespace AnimeStudio
 
         private string FixBonePath(string path)
         {
-            var frame = RootFrame.FindFrameByPath(path);
+            var frame = options.sourceIdentity == null ? RootFrame.FindFrameByPath(path) : RootFrame.FindUniqueFrameByPath(path);
             return frame?.Path;
         }
 
@@ -878,24 +888,13 @@ namespace AnimeStudio
                     {
                         if (m_FloatCurve.classID == ClassIDType.SkinnedMeshRenderer) //BlendShape
                         {
-                            var channelName = m_FloatCurve.attribute;
-                            int dotPos = channelName.IndexOf('.');
-                            if (dotPos >= 0)
-                            {
-                                channelName = channelName.Substring(dotPos + 1);
-                            }
-
-                            var path = GetPathByChannelName(channelName);
-                            if (string.IsNullOrEmpty(path))
-                            {
-                                path = FixBonePath(animationClip, m_FloatCurve.path);
-                            }
-                            var track = iAnim.FindTrack(path, channelName);
-                            if (track.BlendShape == null)
-                            {
-                                track.BlendShape = new ImportedBlendShape();
-                                track.BlendShape.ChannelName = channelName;
-                            }
+                            const string prefix = "blendShape.";
+                            if (!m_FloatCurve.attribute.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                            var channelName = m_FloatCurve.attribute.Substring(prefix.Length);
+                            var frame = FindBlendShapeFrame(animationClip, m_FloatCurve.path);
+                            var track = FindBlendShapeTrack(iAnim, frame, m_FloatCurve, channel => channel.SourceName == channelName,
+                                $"path {m_FloatCurve.path}, channel {channelName}");
+                            if (track == null) continue;
                             foreach (var m_Curve in m_FloatCurve.curve.m_Curve)
                             {
                                 track.BlendShape.Keyframes.Add(new ImportedKeyframe<float>(m_Curve.time, m_Curve.value));
@@ -1050,7 +1049,23 @@ namespace AnimeStudio
             foreach (var binding in bindings)
             {
                 var width = Width(binding);
-                if (binding.typeID == ClassIDType.Transform && binding.attribute >= 1 && binding.attribute <= 4)
+                if (IsBlendShapeBinding(binding))
+                {
+                    var track = FindBlendShapeTrack(animation, FindBlendShapeFrame(source, binding.path), binding,
+                        channel => channel.SourceBindingHash == binding.attribute || channel.SourceNameHash == binding.attribute,
+                        $"path hash {binding.path}, attribute hash {binding.attribute}");
+                    if (track != null)
+                    {
+                        track.LinearInterpolation = true;
+                        foreach (var time in times)
+                        {
+                            var value = Evaluate(offset, time);
+                            if (!float.IsFinite(value)) throw new NotSupportedException("Unity blendshape sample is non-finite.");
+                            track.BlendShape.Keyframes.Add(new ImportedKeyframe<float>(time, value));
+                        }
+                    }
+                }
+                else if (binding.typeID == ClassIDType.Transform && binding.attribute >= 1 && binding.attribute <= 4)
                 {
                     var path = FixBonePath(GetPathFromHash(binding.path));
                     if (string.IsNullOrEmpty(path) || path.StartsWith("unknown ", StringComparison.Ordinal))
@@ -1084,32 +1099,13 @@ namespace AnimeStudio
         private void ReadCurveData(ImportedKeyframedAnimation iAnim, AnimationClipBindingConstant m_ClipBindingConstant, int index, float time, float[] data, int offset, ref int curveIndex)
         {
             var binding = m_ClipBindingConstant.FindBinding(index);
-            if (binding.typeID == ClassIDType.SkinnedMeshRenderer) //BlendShape
+            if (IsBlendShapeBinding(binding))
             {
-                var channelName = GetChannelNameFromHash(binding.attribute);
-                if (string.IsNullOrEmpty(channelName))
-                {
-                    curveIndex++;
-                    return;
-                }
-                int dotPos = channelName.IndexOf('.');
-                if (dotPos >= 0)
-                {
-                    channelName = channelName.Substring(dotPos + 1);
-                }
-
-                var path = GetPathByChannelName(channelName);
-                if (string.IsNullOrEmpty(path))
-                {
-                    path = FixBonePath(GetPathFromHash(binding.path));
-                }
-                var track = iAnim.FindTrack(path, channelName);
-                if (track.BlendShape == null)
-                {
-                    track.BlendShape = new ImportedBlendShape();
-                    track.BlendShape.ChannelName = channelName;
-                }
-                track.BlendShape.Keyframes.Add(new ImportedKeyframe<float>(time, data[curveIndex++ + offset]));
+                var value = data[curveIndex++ + offset];
+                var track = FindBlendShapeTrack(iAnim, FindBlendShapeFrame(null, binding.path), binding,
+                    channel => channel.SourceBindingHash == binding.attribute || channel.SourceNameHash == binding.attribute,
+                    $"path hash {binding.path}, attribute hash {binding.attribute}");
+                track?.BlendShape.Keyframes.Add(new ImportedKeyframe<float>(time, value));
             }
             else if (binding.typeID == ClassIDType.Transform)
             {
@@ -1164,6 +1160,7 @@ namespace AnimeStudio
 
         private string GetPathFromHash(uint hash)
         {
+            if (options.sourceIdentity != null && ambiguousBonePathHashes.Contains(hash)) return null;
             bonePathHash.TryGetValue(hash, out var boneName);
             if (string.IsNullOrEmpty(boneName))
             {
@@ -1182,7 +1179,7 @@ namespace AnimeStudio
             var crc = new SevenZip.CRC();
             var bytes = Encoding.UTF8.GetBytes(name);
             crc.Update(bytes, 0, (uint)bytes.Length);
-            bonePathHash[crc.GetDigest()] = name;
+            AddBonePath(crc.GetDigest(), name);
             int index;
             while ((index = name.IndexOf("/", StringComparison.Ordinal)) >= 0)
             {
@@ -1190,13 +1187,20 @@ namespace AnimeStudio
                 crc = new SevenZip.CRC();
                 bytes = Encoding.UTF8.GetBytes(name);
                 crc.Update(bytes, 0, (uint)bytes.Length);
-                bonePathHash[crc.GetDigest()] = name;
+                AddBonePath(crc.GetDigest(), name);
             }
             foreach (var pptr in m_Transform.m_Children)
             {
                 if (pptr.TryGet(out var child))
                     CreateBonePathHash(child);
             }
+        }
+
+        private void AddBonePath(uint hash, string path)
+        {
+            if (bonePathHash.TryGetValue(hash, out var previous) && previous != path)
+                ambiguousBonePathHashes.Add(hash);
+            bonePathHash[hash] = path;
         }
 
         private void DeoptimizeTransformHierarchy()
@@ -1244,31 +1248,53 @@ namespace AnimeStudio
             }
         }
 
-        private string GetPathByChannelName(string channelName)
+        private ImportedFrame FindBlendShapeFrame(AnimationClip clip, uint hash)
         {
-            foreach (var morph in MorphList)
-            {
-                foreach (var channel in morph.Channels)
-                {
-                    if (channel.Name == channelName)
-                    {
-                        return morph.Path;
-                    }
-                }
-            }
-            return null;
+            if (hash == 0) return FindBlendShapeFrame(clip, "");
+            if (ambiguousBonePathHashes.Contains(hash)) return null;
+            return RootFrame.FindUniqueFrameByPath(GetPathFromHash(hash));
         }
 
-        private string GetChannelNameFromHash(uint attribute)
+        private static bool IsBlendShapeBinding(GenericBinding binding) =>
+            binding.typeID == ClassIDType.SkinnedMeshRenderer && binding.customType == (byte)BindingCustomType.BlendShape &&
+            binding.isIntCurve == 0 && binding.isPPtrCurve == 0;
+
+        private ImportedFrame FindBlendShapeFrame(AnimationClip clip, string path)
         {
-            if (morphChannelNames.TryGetValue(attribute, out var name))
+            var rootPath = animationRoot?.Path;
+            if (clip != null && boundAnimationPathDic.TryGetValue(clip, out var boundPath)) rootPath = boundPath;
+            if (rootPath == null) return RootFrame.FindUniqueFrameByPath(path);
+            return RootFrame.FindUniqueFrameByPath(string.IsNullOrEmpty(path) ? rootPath : rootPath + "/" + path, fullPath: true);
+        }
+
+        private ImportedAnimationKeyframedTrack FindBlendShapeTrack(ImportedKeyframedAnimation animation, ImportedFrame frame, object sourceBinding,
+            Func<ImportedMorphChannel, bool> matchesChannel, string binding)
+        {
+            var candidates = MorphList.Where(morph => frame != null && morph.SourceMesh.SourceFrame == frame)
+                .SelectMany(morph => morph.Channels.Where(matchesChannel).Select(channel => (morph, channel)))
+                .Take(2).ToArray();
+            if (candidates.Length != 1 || MeshList.Find(mesh => mesh.SourceFrame == frame) != candidates[0].morph.SourceMesh ||
+                candidates[0].morph.Channels.Count(channel => channel.Name == candidates[0].channel.Name) != 1)
             {
-                return name;
-            }
-            else
-            {
+                UnresolvedBlendShapeBindings.Add($"{animation.Name}: {binding} has no unique renderer channel.");
                 return null;
             }
+            var (target, channel) = candidates[0];
+            var track = animation.FindTrack(frame.Path, channel.Name);
+            if (track.BlendShape == null)
+            {
+                track.BlendShape = new ImportedBlendShape { ChannelName = channel.Name, SourceMesh = target.SourceMesh };
+                blendShapeBindings.Add(track.BlendShape, sourceBinding);
+            }
+            if (ambiguousBlendShapes.Contains(track.BlendShape)) return null;
+            if (!ReferenceEquals(blendShapeBindings[track.BlendShape], sourceBinding))
+            {
+                ambiguousBlendShapes.Add(track.BlendShape);
+                track.BlendShape.Keyframes.Clear();
+                UnresolvedBlendShapeBindings.Add($"{animation.Name}: {binding} conflicts with another binding on the same renderer channel.");
+                return null;
+            }
+            return track;
         }
 
         public record Options
@@ -1278,6 +1304,7 @@ namespace AnimeStudio
             public bool collectAnimations;
             public bool exportMaterials;
             public int unityGenericResampleRate;
+            public Func<Object, string> sourceIdentity;
             public HashSet<Material> materials;
             public Dictionary<string, (bool, int)> uvs;
             public Dictionary<string, int> texs; 

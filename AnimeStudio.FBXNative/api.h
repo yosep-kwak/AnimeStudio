@@ -35,10 +35,13 @@ AS_API(void) AsFbxDisposeContext(AsFbxContext** ppContext);
 AS_API(void) AsFbxSetFramePaths(AsFbxContext* pContext, const char* ppPaths[], int32_t count);
 
 AS_API(void) AsFbxExportScene(AsFbxContext* pContext);
+// Do not free error.
+AS_API(bool32_t) AsFbxExportSceneChecked(AsFbxContext* pContext, const char** error);
 
 AS_API(fbxsdk::FbxNode*) AsFbxGetSceneRootNode(AsFbxContext* pContext);
 
 AS_API(fbxsdk::FbxNode*) AsFbxExportSingleFrame(AsFbxContext* pContext, fbxsdk::FbxNode* pParentNode, const char* pFramePath, const char* pFrameName, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ);
+AS_API(fbxsdk::FbxNode*) AsFbxExportSourceFrame(AsFbxContext* pContext, fbxsdk::FbxNode* pParentNode, const char* pFramePath, const char* pFrameName, const char* sourceIdentity, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ);
 
 AS_API(void) AsFbxSetJointsNode_CastToBone(AsFbxContext* pContext, fbxsdk::FbxNode* pNode, float boneSize);
 
@@ -61,6 +64,7 @@ AS_API(fbxsdk::FbxCluster*) AsFbxMeshCreateCluster(AsFbxContext* pContext, fbxsd
 AS_API(void) AsFbxMeshAddCluster(fbxsdk::FbxArray<fbxsdk::FbxCluster*>* pArray, /* CanBeNull */ fbxsdk::FbxCluster* pCluster);
 
 AS_API(fbxsdk::FbxMesh*) AsFbxMeshCreateMesh(AsFbxContext* pContext, fbxsdk::FbxNode* pFrameNode);
+AS_API(void) AsFbxSetMeshSourceIdentity(fbxsdk::FbxMesh* mesh, const char* sourceIdentity);
 
 AS_API(void) AsFbxMeshInitControlPoints(fbxsdk::FbxMesh* pMesh, int32_t vertexCount);
 
@@ -143,6 +147,7 @@ AS_API(void) AsFbxAnimBeginBlendShapeAnimCurve(AsFbxAnimContext* pAnimContext, i
 AS_API(void) AsFbxAnimEndBlendShapeAnimCurve(AsFbxAnimContext* pAnimContext);
 
 AS_API(void) AsFbxAnimAddBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value);
+AS_API(void) AsFbxAnimAddLinearBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value);
 
 AS_API(AsFbxMorphContext*) AsFbxMorphCreateContext();
 

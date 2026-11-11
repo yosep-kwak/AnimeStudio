@@ -180,20 +180,21 @@ AS_API(void) AsFbxSetFramePaths(AsFbxContext* pContext, const char* ppPaths[], i
 	}
 }
 
+AS_API(bool32_t) AsFbxExportSceneChecked(AsFbxContext* pContext, const char** error)
+{
+	if (pContext == nullptr || pContext->pExporter == nullptr || pContext->pScene == nullptr)
+	{
+		if (error != nullptr) *error = "FBX exporter or scene is unavailable.";
+		return false;
+	}
+	if (pContext->pExporter->Export(pContext->pScene)) return true;
+	if (error != nullptr) *error = pContext->pExporter->GetStatus().GetErrorString();
+	return false;
+}
+
 AS_API(void) AsFbxExportScene(AsFbxContext* pContext)
 {
-	if (pContext == nullptr)
-	{
-		return;
-	}
-
-	auto pScene = pContext->pScene;
-	auto pExporter = pContext->pExporter;
-
-	if (pExporter != nullptr && pScene != nullptr)
-	{
-		pExporter->Export(pScene);
-	}
+	AsFbxExportSceneChecked(pContext, nullptr);
 }
 
 AS_API(FbxNode*) AsFbxGetSceneRootNode(AsFbxContext* pContext)
@@ -211,9 +212,16 @@ AS_API(FbxNode*) AsFbxGetSceneRootNode(AsFbxContext* pContext)
 	return pContext->pScene->GetRootNode();
 }
 
-AS_API(FbxNode*) AsFbxExportSingleFrame(AsFbxContext* pContext, FbxNode* pParentNode, const char* pFramePath, const char* pFrameName, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ)
+static void SetSourceIdentity(FbxObject* object, const char* identity)
 {
-	if (pContext == nullptr || pContext->pScene == nullptr)
+	auto property = FbxProperty::Create(object, FbxStringDT, "UnityBridgeSourceIdentity");
+	property.ModifyFlag(FbxPropertyFlags::eUserDefined, true);
+	property.Set(FbxString(identity));
+}
+
+AS_API(FbxNode*) AsFbxExportSourceFrame(AsFbxContext* pContext, FbxNode* pParentNode, const char* pFramePath, const char* pFrameName, const char* sourceIdentity, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ)
+{
+	if (pContext == nullptr || pContext->pScene == nullptr || pParentNode == nullptr)
 	{
 		return nullptr;
 	}
@@ -226,6 +234,12 @@ AS_API(FbxNode*) AsFbxExportSingleFrame(AsFbxContext* pContext, FbxNode* pParent
 	}
 
 	auto pFrameNode = FbxNode::Create(pContext->pScene, pFrameName);
+	if (sourceIdentity != nullptr)
+	{
+		SetSourceIdentity(pFrameNode, sourceIdentity);
+		// Unity Transform world matrices multiply the full parent matrix by local TRS.
+		pFrameNode->SetTransformationInheritType(FbxTransform::eInheritRSrs);
+	}
 
 	pFrameNode->LclScaling.Set(FbxDouble3(localScaleX, localScaleY, localScaleZ));
 	pFrameNode->LclRotation.Set(FbxDouble3(localRotationX, localRotationY, localRotationZ));
@@ -240,6 +254,11 @@ AS_API(FbxNode*) AsFbxExportSingleFrame(AsFbxContext* pContext, FbxNode* pParent
 	}
 
 	return pFrameNode;
+}
+
+AS_API(FbxNode*) AsFbxExportSingleFrame(AsFbxContext* pContext, FbxNode* pParentNode, const char* pFramePath, const char* pFrameName, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ)
+{
+	return AsFbxExportSourceFrame(pContext, pParentNode, pFramePath, pFrameName, nullptr, localPositionX, localPositionY, localPositionZ, localRotationX, localRotationY, localRotationZ, localScaleX, localScaleY, localScaleZ);
 }
 
 AS_API(void) AsFbxSetJointsNode_CastToBone(AsFbxContext* pContext, FbxNode* pNode, float boneSize)
@@ -450,6 +469,12 @@ AS_API(FbxMesh*) AsFbxMeshCreateMesh(AsFbxContext* pContext, FbxNode* pFrameNode
 	pFrameNode->SetNodeAttribute(pMesh);
 
 	return pMesh;
+}
+
+AS_API(void) AsFbxSetMeshSourceIdentity(FbxMesh* mesh, const char* sourceIdentity)
+{
+	if (mesh != nullptr && sourceIdentity != nullptr)
+		SetSourceIdentity(mesh, sourceIdentity);
 }
 
 AS_API(void) AsFbxMeshInitControlPoints(FbxMesh* pMesh, int32_t vertexCount)
@@ -1057,7 +1082,7 @@ AS_API(void) AsFbxAnimEndBlendShapeAnimCurve(AsFbxAnimContext* pAnimContext)
 	pAnimContext->lAnimCurve->KeyModifyEnd();
 }
 
-AS_API(void) AsFbxAnimAddBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value)
+static void AddBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value, FbxAnimCurveDef::EInterpolationType interpolation)
 {
 	if (pAnimContext == nullptr || pAnimContext->lAnimCurve == nullptr)
 	{
@@ -1069,7 +1094,17 @@ AS_API(void) AsFbxAnimAddBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, floa
 
 	auto keyIndex = pAnimContext->lAnimCurve->KeyAdd(lTime);
 	pAnimContext->lAnimCurve->KeySetValue(keyIndex, value);
-	pAnimContext->lAnimCurve->KeySetInterpolation(keyIndex, FbxAnimCurveDef::eInterpolationCubic);
+	pAnimContext->lAnimCurve->KeySetInterpolation(keyIndex, interpolation);
+}
+
+AS_API(void) AsFbxAnimAddBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value)
+{
+	AddBlendShapeKeyframe(pAnimContext, time, value, FbxAnimCurveDef::eInterpolationCubic);
+}
+
+AS_API(void) AsFbxAnimAddLinearBlendShapeKeyframe(AsFbxAnimContext* pAnimContext, float time, float value)
+{
+	AddBlendShapeKeyframe(pAnimContext, time, value, FbxAnimCurveDef::eInterpolationLinear);
 }
 
 AS_API(AsFbxMorphContext*) AsFbxMorphCreateContext()

@@ -25,16 +25,30 @@ namespace AnimeStudio.FbxInterop
         private static extern void AsFbxExportScene(IntPtr context);
 
         [DllImport(FbxDll.DllName)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AsFbxExportSceneChecked(IntPtr context, out IntPtr error);
+
+        [DllImport(FbxDll.DllName)]
         private static extern IntPtr AsFbxGetSceneRootNode(IntPtr context);
 
-        private static IntPtr AsFbxExportSingleFrame(IntPtr context, IntPtr parentNode, string framePath, string frameName, in Vector3 localPosition, in Quaternion localRotation, in Vector3 localScale)
+        private static IntPtr AsFbxExportSingleFrame(IntPtr context, IntPtr parentNode, ImportedFrame frame)
         {
-            var localRotationEuler = Fbx.QuaternionToEuler(localRotation);
-            return AsFbxExportSingleFrame(context, parentNode, framePath, frameName, localPosition.X, localPosition.Y, localPosition.Z, localRotationEuler.X, localRotationEuler.Y, localRotationEuler.Z, localScale.X, localScale.Y, localScale.Z);
+            var position = frame.LocalPosition;
+            var rotation = Fbx.QuaternionToEuler(frame.LocalRotation);
+            var scale = frame.LocalScale;
+            return string.IsNullOrEmpty(frame.SourceIdentity)
+                ? AsFbxExportSingleFrame(context, parentNode, frame.Path, frame.Name, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, scale.X, scale.Y, scale.Z)
+                : AsFbxExportSourceFrame(context, parentNode, frame.Path, frame.Name, frame.SourceIdentity, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, scale.X, scale.Y, scale.Z);
         }
 
         [DllImport(FbxDll.DllName)]
         private static extern IntPtr AsFbxExportSingleFrame(IntPtr context, IntPtr parentNode, [MarshalAs(UnmanagedType.LPUTF8Str)] string strFramePath, [MarshalAs(UnmanagedType.LPUTF8Str)] string strFrameName, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ);
+
+        [DllImport(FbxDll.DllName)]
+        private static extern IntPtr AsFbxExportSourceFrame(IntPtr context, IntPtr parentNode, [MarshalAs(UnmanagedType.LPUTF8Str)] string framePath, [MarshalAs(UnmanagedType.LPUTF8Str)] string frameName, [MarshalAs(UnmanagedType.LPUTF8Str)] string sourceIdentity, float localPositionX, float localPositionY, float localPositionZ, float localRotationX, float localRotationY, float localRotationZ, float localScaleX, float localScaleY, float localScaleZ);
+
+        [DllImport(FbxDll.DllName)]
+        private static extern void AsFbxSetMeshSourceIdentity(IntPtr mesh, [MarshalAs(UnmanagedType.LPUTF8Str)] string sourceIdentity);
 
         [DllImport(FbxDll.DllName)]
         private static extern void AsFbxSetJointsNode_CastToBone(IntPtr context, IntPtr node, float boneSize);
@@ -192,6 +206,8 @@ namespace AnimeStudio.FbxInterop
 
         [DllImport(FbxDll.DllName)]
         private static extern void AsFbxAnimAddBlendShapeKeyframe(IntPtr pAnimContext, float time, float value);
+        [DllImport(FbxDll.DllName)]
+        private static extern void AsFbxAnimAddLinearBlendShapeKeyframe(IntPtr pAnimContext, float time, float value);
 
         [DllImport(FbxDll.DllName)]
         private static extern IntPtr AsFbxMorphCreateContext();

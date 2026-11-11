@@ -37,11 +37,28 @@ namespace AnimeStudio
         };
         private static List<List<string>> storedData;
         private static readonly string UnityCNKeysPath = "CNKeys.json";
+        private static bool readOnly;
 
         static UnityCNManager() {}
 
+        public static void InitializeReadOnly()
+        {
+            if (readOnly) return;
+            readOnly = true;
+            storedData = null;
+        }
+
+        private static List<List<string>> CopyKeys(List<List<string>> keys) =>
+            keys.Select(entry => new List<string>(entry)).ToList();
+
+        private static void RequireWritableStore()
+        {
+            if (readOnly) throw new InvalidOperationException("The headless UnityCN key store is read-only.");
+        }
+
         public static List<List<string>> GetKeys()
         {
+            if (readOnly) return ReadJson();
             if (storedData == null)
             {
                 storedData = ReadJson();
@@ -49,10 +66,11 @@ namespace AnimeStudio
             return storedData;
         }
 
-        public static List<List<string>> GetDefaultKeys() => baseData;
+        public static List<List<string>> GetDefaultKeys() => readOnly ? CopyKeys(baseData) : baseData;
 
         public static void SetKeys(List<List<string>> keys)
         {
+            RequireWritableStore();
             var options = new JsonSerializerOptions
             {
                 WriteIndented = true
@@ -63,6 +81,7 @@ namespace AnimeStudio
 
         public static List<List<string>> ReadJson()
         {
+            if (readOnly) return CopyKeys(storedData ??= ReadKeyStoreSnapshot());
             try
             {
                 var json = File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UnityCNKeysPath));
@@ -82,8 +101,22 @@ namespace AnimeStudio
             }
         }
 
+        private static List<List<string>> ReadKeyStoreSnapshot()
+        {
+            try
+            {
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, UnityCNKeysPath);
+                var keys = JsonSerializer.Deserialize<List<List<string>>>(File.ReadAllText(path));
+                if (keys is { Count: > 0 } && keys.All(entry => entry is { Count: >= 3 } &&
+                    entry.Take(3).All(field => field != null))) return keys;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { }
+            return CopyKeys(baseData);
+        }
+
         public static List<List<string>> ResetJson()
         {
+            RequireWritableStore();
             var options = new JsonSerializerOptions {
                 WriteIndented = true
             };
@@ -93,9 +126,10 @@ namespace AnimeStudio
 
         public static void SetKey(UnityCN.Entry entry)
         {
+            RequireWritableStore();
             if (UnityCN.SetKey(entry))
             {
-                Logger.Info($"[UnityCN] Selected Key is {entry.Name} - {entry.Key}");
+                Logger.Info($"[UnityCN] Selected Key is {entry.Name}");
             }
             else
             {

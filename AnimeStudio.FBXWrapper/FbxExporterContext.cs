@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace AnimeStudio.FbxInterop
 {
@@ -100,11 +101,13 @@ namespace AnimeStudio.FbxInterop
             AsFbxSetFramePaths(_pContext, framePathArray);
         }
 
-        internal void ExportScene()
+        internal void ExportScene(bool checkStatus)
         {
             EnsureNotDisposed();
 
-            AsFbxExportScene(_pContext);
+            if (!checkStatus) AsFbxExportScene(_pContext);
+            else if (!AsFbxExportSceneChecked(_pContext, out var error))
+                throw new IOException(Marshal.PtrToStringUTF8(error) ?? "FBX SDK did not export the scene.");
         }
 
         internal void ExportFrame(List<ImportedMesh> meshList, List<ImportedFrame> meshFrames, ImportedFrame rootFrame)
@@ -124,9 +127,9 @@ namespace AnimeStudio.FbxInterop
                 var parentNode = nodeStack.Pop();
                 var frame = frameStack.Pop();
 
-                var childNode = AsFbxExportSingleFrame(_pContext, parentNode, frame.Path, frame.Name, frame.LocalPosition, frame.LocalRotation, frame.LocalScale);
+                var childNode = AsFbxExportSingleFrame(_pContext, parentNode, frame);
 
-                if (meshList != null && ImportedHelpers.FindMesh(frame.Path, meshList) != null)
+                if (meshList != null && FindMesh(frame, meshList) != null)
                 {
                     meshFrames.Add(frame);
                 }
@@ -189,9 +192,22 @@ namespace AnimeStudio.FbxInterop
         internal void ExportMeshFromFrame(ImportedFrame rootFrame, ImportedFrame meshFrame, List<ImportedMesh> meshList, List<ImportedMaterial> materialList, List<ImportedTexture> textureList)
         {
             var meshNode = _frameToNode[meshFrame];
-            var mesh = ImportedHelpers.FindMesh(meshFrame.Path, meshList);
+            var mesh = FindMesh(meshFrame, meshList);
 
             ExportMesh(rootFrame, materialList, textureList, meshNode, mesh);
+        }
+
+        private static ImportedMesh FindMesh(ImportedFrame frame, List<ImportedMesh> meshes)
+        {
+            return meshes.Find(mesh => mesh.SourceFrame == frame ||
+                (string.IsNullOrEmpty(mesh.SourceIdentity) && mesh.Path == frame.Path));
+        }
+
+        private static ImportedFrame FindExportFrame(ImportedFrame rootFrame, string path)
+        {
+            return string.IsNullOrEmpty(rootFrame.SourceIdentity)
+                ? rootFrame.FindFrameByPath(path)
+                : rootFrame.FindUniqueFrameByPath(path, fullPath: true);
         }
 
         private IntPtr ExportTexture(ImportedTexture texture)
@@ -249,21 +265,21 @@ namespace AnimeStudio.FbxInterop
                     {
                         if (bone.Path != null)
                         {
-                            var frame = rootFrame.FindFrameByPath(bone.Path);
-                            var boneNode = _frameToNode[frame];
-
-                            var cluster = AsFbxMeshCreateCluster(_pContext, boneNode);
-
-                            AsFbxMeshAddCluster(pClusterArray, cluster);
+                            var frame = bone.SourceFrame ?? FindExportFrame(rootFrame, bone.Path);
+                            if (frame != null && _frameToNode.TryGetValue(frame, out var boneNode) && boneNode != IntPtr.Zero)
+                            {
+                                var cluster = AsFbxMeshCreateCluster(_pContext, boneNode);
+                                AsFbxMeshAddCluster(pClusterArray, cluster);
+                                continue;
+                            }
                         }
-                        else
-                        {
-                            AsFbxMeshAddCluster(pClusterArray, IntPtr.Zero);
-                        }
+                        AsFbxMeshAddCluster(pClusterArray, IntPtr.Zero);
                     }
                 }
 
                 var mesh = AsFbxMeshCreateMesh(_pContext, frameNode);
+                if (!string.IsNullOrEmpty(importedMesh.SourceIdentity))
+                    AsFbxSetMeshSourceIdentity(mesh, importedMesh.SourceIdentity);
 
                 AsFbxMeshInitControlPoints(mesh, importedMesh.VertexList.Count);
 
@@ -525,7 +541,7 @@ namespace AnimeStudio.FbxInterop
                     continue;
                 }
 
-                var frame = rootFrame.FindFrameByPath(track.Path);
+                var frame = track.BlendShape?.SourceMesh?.SourceFrame ?? FindExportFrame(rootFrame, track.Path);
 
                 if (frame == null)
                 {
@@ -574,7 +590,7 @@ namespace AnimeStudio.FbxInterop
 
                 var blendShape = track.BlendShape;
 
-                if (blendShape != null)
+                if (blendShape?.Keyframes.Count > 0)
                 {
                     var channelCount = AsFbxAnimGetCurrentBlendShapeChannelCount(pAnimContext, pNode);
 
@@ -591,7 +607,10 @@ namespace AnimeStudio.FbxInterop
 
                             foreach (var keyframe in blendShape.Keyframes)
                             {
-                                AsFbxAnimAddBlendShapeKeyframe(pAnimContext, keyframe.time, keyframe.value);
+                                if (track.LinearInterpolation)
+                                    AsFbxAnimAddLinearBlendShapeKeyframe(pAnimContext, keyframe.time, keyframe.value);
+                                else
+                                    AsFbxAnimAddBlendShapeKeyframe(pAnimContext, keyframe.time, keyframe.value);
                             }
 
                             AsFbxAnimEndBlendShapeAnimCurve(pAnimContext);
@@ -601,7 +620,7 @@ namespace AnimeStudio.FbxInterop
             }
         }
 
-        internal void ExportMorphs(ImportedFrame rootFrame, List<ImportedMorph> morphList)
+        internal void ExportMorphs(ImportedFrame rootFrame, List<ImportedMesh> meshList, List<ImportedMorph> morphList)
         {
             if (morphList == null || morphList.Count == 0)
             {
@@ -610,9 +629,9 @@ namespace AnimeStudio.FbxInterop
 
             foreach (var morph in morphList)
             {
-                var frame = rootFrame.FindFrameByPath(morph.Path);
+                var frame = morph.SourceMesh == null ? FindExportFrame(rootFrame, morph.Path) : morph.SourceMesh.SourceFrame;
 
-                if (frame == null)
+                if (frame == null || (morph.SourceMesh != null && FindMesh(frame, meshList) != morph.SourceMesh))
                 {
                     continue;
                 }
